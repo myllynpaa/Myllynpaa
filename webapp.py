@@ -44,10 +44,20 @@ PAGE = """
 <body>
   <h1>Sisäpiirikaupat</h1>
   <p class="muted">Nasdaq Helsinki + First North — johdon liiketoimet -tiedotteet (MAR 19)</p>
-  <form method="get">
+  <form method="get" id="hakulomake">
     <label>Alkaen: <input type="date" name="from_date" value="{{ from_date }}"></label>
     <button type="submit">Hae tiedotteet</button>
+    <p class="muted">Isommalla aikavälillä (esim. useita kuukausia) haku voi kestää
+    useita minuutteja, koska jokainen tiedote haetaan erikseen. Sivu ei ole jumissa,
+    vaikka mitään ei näy hetkeen.</p>
   </form>
+  <script>
+    document.getElementById('hakulomake').addEventListener('submit', function () {
+      var btn = this.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Haetaan... odota, tämä voi kestää';
+    });
+  </script>
 
   {% if error %}
     <p class="error">Virhe haussa: {{ error }}</p>

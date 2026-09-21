@@ -62,7 +62,9 @@ import argparse
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from functools import partial
 from zoneinfo import ZoneInfo
 
 import requests
@@ -75,6 +77,9 @@ CNS_CATEGORY = "Managers' Transactions"
 PAGE_SIZE = 100
 HELSINKI_MARKET_HINT = "helsinki"  # suodatetaan item["market"]:sta tällä
 RELEASE_TZ = ZoneInfo("CET")  # sama kuin pyynnön oma timeZone=CET-parametri
+# Tiedotteiden tekstit haetaan rinnakkain, koska niitä voi isommalla
+# aikavälillä olla satoja — peräkkäin haettuna sivu tuntuisi jumittuvan.
+MAX_WORKERS = 8
 
 _JSONP_RE = re.compile(r"^\s*[\w.$]+\s*\((.*)\)\s*;?\s*$", re.S)
 
@@ -171,6 +176,28 @@ def fetch_release_text(session: requests.Session, message_url: str) -> str:
     return "\n".join(lines)
 
 
+def fetch_and_parse_one(session: requests.Session, item: dict) -> dict:
+    rid = f"nasdaq-{item['disclosureId']}"
+    text = fetch_release_text(session, item["messageUrl"])
+    result = parse_release(text, title=item.get("headline"))
+    rows = to_rows(result, release_id=rid)
+    print(f"[{result.status}] {item.get('company')} — {item.get('headline')} ({item.get('market')})")
+    return {
+        "release": {
+            "id": rid,
+            "source": "nasdaq_company_news",
+            "published_at": parse_release_dt(item.get("published") or item.get("releaseTime")),
+            "company_name": item.get("company"),
+            "title": item.get("headline"),
+            "url": item.get("messageUrl"),
+            "body": text,
+            "parse_status": result.status,
+            "parser_version": result.parser_version,
+        },
+        "transactions": rows,
+    }
+
+
 def collect(from_date: date) -> list[dict]:
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (compatible; sisapiiriseula-collector/0.2)"
@@ -179,31 +206,12 @@ def collect(from_date: date) -> list[dict]:
     helsinki_items = [i for i in all_items if is_helsinki_listing(i)]
     print(
         f"{len(helsinki_items)}/{len(all_items)} tiedotetta oli Helsingin markkinalla "
-        "(päälista tai First North).",
+        "(päälista tai First North). Haetaan tekstit rinnakkain...",
         file=sys.stderr,
     )
 
-    collected = []
-    for item in helsinki_items:
-        rid = f"nasdaq-{item['disclosureId']}"
-        text = fetch_release_text(session, item["messageUrl"])
-        result = parse_release(text, title=item.get("headline"))
-        rows = to_rows(result, release_id=rid)
-        collected.append({
-            "release": {
-                "id": rid,
-                "source": "nasdaq_company_news",
-                "published_at": parse_release_dt(item.get("published") or item.get("releaseTime")),
-                "company_name": item.get("company"),
-                "title": item.get("headline"),
-                "url": item.get("messageUrl"),
-                "body": text,
-                "parse_status": result.status,
-                "parser_version": result.parser_version,
-            },
-            "transactions": rows,
-        })
-        print(f"[{result.status}] {item.get('company')} — {item.get('headline')} ({item.get('market')})")
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        collected = list(pool.map(partial(fetch_and_parse_one, session), helsinki_items))
     return collected
 
 
