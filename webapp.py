@@ -19,6 +19,37 @@ from nasdaq_api_collector import collect
 
 app = Flask(__name__)
 
+# Suomennokset taulukon arvoille (parser.py:n käyttämät englanninkieliset koodit).
+KIND_FI = {
+    "BUY": "Osto",
+    "SELL": "Myynti",
+    "AWARD": "Palkkio-osake",
+    "SUBSCRIPTION": "Merkintä",
+    "OPTION_EXERCISE": "Option käyttö",
+    "GIFT_OR_INHERITANCE": "Lahja/perintö",
+    "PLEDGE": "Pantti",
+    "LENDING": "Laina",
+    "OTHER": "Muu",
+    "UNKNOWN": "Tuntematon",
+}
+
+ROLE_FI = {
+    "CEO": "Toimitusjohtaja",
+    "CFO": "Talousjohtaja",
+    "BOARD": "Hallitus",
+    "SUPERVISORY": "Hallintoneuvosto",
+    "OTHER_EXECUTIVE": "Johtoryhmä",
+    "CLOSELY_ASSOCIATED": "Lähipiiri",
+    "OTHER": "Muu",
+    "UNKNOWN": "Tuntematon",
+}
+
+STATUS_FI = {
+    "OK": "Kunnossa",
+    "NEEDS_REVIEW": "Tarkista",
+    "UNPARSED": "Ei tunnistettu",
+}
+
 PAGE = """
 <!doctype html>
 <html lang="fi">
@@ -39,11 +70,19 @@ PAGE = """
   .status-UNPARSED { color: #c62828; }
   .error { color: #c62828; font-weight: bold; }
   .muted { color: #666; font-size: 0.85rem; }
+  .selitykset { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; font-size: 0.9rem; }
+  .selitykset h2 { font-size: 1rem; margin: 0 0 0.5rem 0; }
+  .selitykset dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; column-gap: 0.75rem; row-gap: 0.25rem; }
+  .selitykset dt { font-weight: 600; }
+  .selitykset dd { margin: 0; color: #333; }
 </style>
 </head>
 <body>
   <h1>Sisäpiirikaupat</h1>
-  <p class="muted">Nasdaq Helsinki + First North — johdon liiketoimet -tiedotteet (MAR 19)</p>
+  <p class="muted">Suomalaisten pörssiyhtiöiden (Nasdaq Helsinki ja First North)
+  johtohenkilöiden ja heidän lähipiirinsä osakekaupat. Yhtiöiden pitää lain mukaan
+  ilmoittaa nämä pörssitiedotteella (ns. "johdon liiketoimet", MAR 19 -artikla).</p>
+
   <form method="get" id="hakulomake">
     <label>Alkaen: <input type="date" name="from_date" value="{{ from_date }}"></label>
     <label>Loppuen: <input type="date" name="to_date" value="{{ to_date }}"></label>
@@ -60,6 +99,34 @@ PAGE = """
     });
   </script>
 
+  <div class="selitykset">
+    <h2>Sarakkeiden selitykset</h2>
+    <dl>
+      <dt>Laji</dt>
+      <dd>
+        Osto/Myynti = tavallinen osakekauppa pörssissä.
+        Palkkio-osake = henkilö sai osakkeita palkkiona (esim. osakepalkkio-ohjelma), ei ostanut niitä.
+        Merkintä = henkilö merkitsi (osti suoraan yhtiöltä) uusia osakkeita, esim. osakeannissa.
+        Option käyttö = henkilö käytti aiemmin saamansa optio-oikeuden osakkeiksi.
+        Lahja/perintö = osakkeet vaihtoivat omistajaa lahjana tai perintönä, ei kauppana.
+        Pantti = osakkeet annettiin lainan vakuudeksi.
+      </dd>
+      <dt>Asema</dt>
+      <dd>
+        Missä roolissa henkilö on yhtiössä: Toimitusjohtaja, Talousjohtaja, Hallitus,
+        Hallintoneuvosto, Johtoryhmä. Lähipiiri tarkoittaa, ettei henkilö itse ole johdossa,
+        vaan läheisessä suhteessa johtohenkilöön (esim. puoliso tai oma sijoitusyhtiö).
+      </dd>
+      <dt>Tila</dt>
+      <dd>
+        Kunnossa = tiedote luettiin ja tulkittiin luotettavasti.
+        Tarkista = jokin kohta tiedotteessa oli tulkinnanvarainen — kannattaa katsoa
+        alkuperäinen tiedote (linkki löytyy klikkaamalla yhtiön nimeä, jos saatavilla).
+        Ei tunnistettu = tiedotteen muotoa ei tunnistettu automaattisesti, tietoja ei voitu poimia.
+      </dd>
+    </dl>
+  </div>
+
   {% if error %}
     <p class="error">Virhe haussa: {{ error }}</p>
   {% elif rows %}
@@ -67,20 +134,20 @@ PAGE = """
     <table>
       <tr>
         <th>Yhtiö</th><th>Henkilö</th><th>Asema</th><th>Pvm</th>
-        <th>Laji</th><th>Volyymi</th><th>Hinta</th><th>Valuutta</th><th>Arvo</th><th>Tila</th>
+        <th>Laji</th><th>Osakemäärä</th><th>Hinta/osake</th><th>Valuutta</th><th>Kokonaisarvo</th><th>Tila</th>
       </tr>
       {% for r in rows %}
       <tr class="{{ 'buy' if r.kind == 'BUY' else ('sell' if r.kind == 'SELL' else '') }}">
         <td>{{ r.issuer_name or '' }}</td>
         <td>{{ r.person_display or r.person_name or '' }}</td>
-        <td>{{ r.role }}</td>
+        <td>{{ role_fi.get(r.role, r.role) }}</td>
         <td>{{ r.transaction_date or '' }}</td>
-        <td>{{ r.kind }}</td>
+        <td>{{ kind_fi.get(r.kind, r.kind) }}</td>
         <td>{{ r.volume }}</td>
         <td>{{ r.price }}</td>
         <td>{{ r.currency or '' }}</td>
         <td>{{ r.value }}</td>
-        <td class="status-{{ r.status }}">{{ r.status }}</td>
+        <td class="status-{{ r.status }}">{{ status_fi.get(r.status, r.status) }}</td>
       </tr>
       {% endfor %}
     </table>
@@ -119,6 +186,9 @@ def index():
         error=error,
         searched=searched,
         release_count=release_count,
+        kind_fi=KIND_FI,
+        role_fi=ROLE_FI,
+        status_fi=STATUS_FI,
     )
 
 
