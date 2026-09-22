@@ -133,28 +133,48 @@ def fetch_page(session: requests.Session, from_date_ms: int, start: int, to_date
     return strip_jsonp(resp.text)
 
 
+def _extract_page_items(payload: dict) -> list[dict]:
+    results = payload.get("results", {})
+    page_items = results.get("item", []) if isinstance(results, dict) else []
+    if isinstance(page_items, dict):  # yhden tuloksen vastaus ei aina ole listassa
+        page_items = [page_items]
+    return page_items
+
+
 def fetch_all_items(session: requests.Session, from_date: date, to_date: date | None = None) -> list[dict]:
     """Hakee KAIKKI Pohjoismaiden johdon liiketoimet -tiedotteet fromDate:sta
     (valinnaisesti toDate:en asti) alkaen. Helsinki-suodatus tehdään erikseen
-    (ks. is_helsinki_listing)."""
+    (ks. is_helsinki_listing).
+
+    Ensimmäinen sivu haetaan yksinään (jotta saadaan oikea kokonaismäärä),
+    loput sivut rinnakkain — isolla aikavälillä listahakuja voi olla
+    kymmeniä, ja peräkkäin haettuna se olisi hidasta."""
     from_ms = to_epoch_millis(from_date)
     # toDate on päivän LOPPU (seuraavan päivän alku miinus 1 ms), jotta
     # valittu päivä sisältyy kokonaan hakuun.
     to_ms = to_epoch_millis(to_date + timedelta(days=1)) if to_date else ""
-    items: list[dict] = []
-    start = 0
-    while True:
-        payload = fetch_page(session, from_ms, start, to_ms)
-        results = payload.get("results", {})
-        page_items = results.get("item", []) if isinstance(results, dict) else []
-        if isinstance(page_items, dict):  # yhden tuloksen vastaus ei aina ole listassa
-            page_items = [page_items]
-        total = payload.get("count", len(page_items))
-        items.extend(page_items)
-        print(f"haettu {len(items)}/{total}", file=sys.stderr)
-        if not page_items or len(items) >= total:
-            break
-        start += PAGE_SIZE
+
+    first_payload = fetch_page(session, from_ms, 0, to_ms)
+    first_items = _extract_page_items(first_payload)
+    total = first_payload.get("count", len(first_items))
+    items: list[dict] = list(first_items)
+    print(f"haettu {len(items)}/{total}", file=sys.stderr)
+
+    if not first_items or len(items) >= total:
+        return items
+
+    remaining_starts = list(range(PAGE_SIZE, total, PAGE_SIZE))
+
+    def fetch_one(start: int) -> list[dict]:
+        return _extract_page_items(fetch_page(session, from_ms, start, to_ms))
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        # pool.map palauttaa tulokset syötejärjestyksessä, joten DESC-järjestys säilyy.
+        for page_items in pool.map(fetch_one, remaining_starts):
+            items.extend(page_items)
+            print(f"haettu {len(items)}/{total}", file=sys.stderr)
+            if not page_items:
+                break
     return items
 
 
