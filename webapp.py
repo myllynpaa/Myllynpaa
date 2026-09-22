@@ -75,6 +75,9 @@ PAGE = """
   .selitykset dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; column-gap: 0.75rem; row-gap: 0.25rem; }
   .selitykset dt { font-weight: 600; }
   .selitykset dd { margin: 0; color: #333; }
+  .lajisuodatin { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin: 0.5rem 0; padding: 0; border: none; }
+  .lajisuodatin legend { font-weight: 600; padding: 0; margin-bottom: 0.25rem; }
+  .lajisuodatin label { font-weight: normal; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -87,17 +90,20 @@ PAGE = """
     <label>Alkaen: <input type="date" name="from_date" value="{{ from_date }}"></label>
     <label>Loppuen: <input type="date" name="to_date" value="{{ to_date }}"></label>
     <button type="submit">Hae tiedotteet</button>
+
     <p class="muted">Isommalla aikavälillä (esim. useita kuukausia) haku voi kestää
     useita minuutteja, koska jokainen tiedote haetaan erikseen. Sivu ei ole jumissa,
     vaikka mitään ei näy hetkeen.</p>
   </form>
-  <script>
-    document.getElementById('hakulomake').addEventListener('submit', function () {
-      var btn = this.querySelector('button[type=submit]');
-      btn.disabled = true;
-      btn.textContent = 'Haetaan... odota, tämä voi kestää';
-    });
-  </script>
+
+  {% if rows %}
+  <fieldset class="lajisuodatin" id="lajisuodatin">
+    <legend>Näytä vain nämä lajit (ei vaadi uutta hakua):</legend>
+    {% for k, label in kind_fi.items() %}
+      <label><input type="checkbox" class="laji-checkbox" value="{{ k }}" checked> {{ label }}</label>
+    {% endfor %}
+  </fieldset>
+  {% endif %}
 
   <div class="selitykset">
     <h2>Sarakkeiden selitykset</h2>
@@ -130,14 +136,14 @@ PAGE = """
   {% if error %}
     <p class="error">Virhe haussa: {{ error }}</p>
   {% elif rows %}
-    <p>{{ rows|length }} riviä, {{ release_count }} tiedotetta.</p>
-    <table>
+    <p id="rivilaskuri">{{ rows|length }} riviä, {{ release_count }} tiedotetta.</p>
+    <table id="tulostaulukko">
       <tr>
         <th>Yhtiö</th><th>Henkilö</th><th>Asema</th><th>Pvm</th>
         <th>Laji</th><th>Osakemäärä</th><th>Hinta/osake</th><th>Valuutta</th><th>Kokonaisarvo</th><th>Tila</th>
       </tr>
       {% for r in rows %}
-      <tr class="{{ 'buy' if r.kind == 'BUY' else ('sell' if r.kind == 'SELL' else '') }}">
+      <tr data-kind="{{ r.kind }}" class="{{ 'buy' if r.kind == 'BUY' else ('sell' if r.kind == 'SELL' else '') }}">
         <td>{{ r.issuer_name or '' }}</td>
         <td>{{ r.person_display or r.person_name or '' }}</td>
         <td>{{ role_fi.get(r.role, r.role) }}</td>
@@ -154,6 +160,35 @@ PAGE = """
   {% elif searched %}
     <p>Ei tuloksia tältä väliltä.</p>
   {% endif %}
+
+  <script>
+    document.getElementById('hakulomake').addEventListener('submit', function () {
+      var btn = this.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = 'Haetaan... odota, tämä voi kestää';
+    });
+
+    var lajisuodatin = document.getElementById('lajisuodatin');
+    if (lajisuodatin) {
+      var paivitaSuodatus = function () {
+        var valitut = Array.from(lajisuodatin.querySelectorAll('.laji-checkbox:checked')).map(function (cb) {
+          return cb.value;
+        });
+        var rivit = document.querySelectorAll('#tulostaulukko tr[data-kind]');
+        var nakyvia = 0;
+        rivit.forEach(function (rivi) {
+          var nayta = valitut.indexOf(rivi.dataset.kind) !== -1;
+          rivi.style.display = nayta ? '' : 'none';
+          if (nayta) nakyvia++;
+        });
+        var laskuri = document.getElementById('rivilaskuri');
+        if (laskuri) {
+          laskuri.textContent = nakyvia + ' / ' + rivit.length + ' riviä näkyvissä (suodatettu lajin mukaan).';
+        }
+      };
+      lajisuodatin.addEventListener('change', paivitaSuodatus);
+    }
+  </script>
 </body>
 </html>
 """
