@@ -63,7 +63,7 @@ import json
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from zoneinfo import ZoneInfo
 
@@ -112,7 +112,7 @@ def strip_jsonp(text: str) -> dict:
     return json.loads(m.group(1) if m else text)
 
 
-def fetch_page(session: requests.Session, from_date_ms: int, start: int) -> dict:
+def fetch_page(session: requests.Session, from_date_ms: int, start: int, to_date_ms: int | str = "") -> dict:
     params = {
         "countResults": "true",
         "globalGroup": "exchangeNotice",
@@ -126,21 +126,25 @@ def fetch_page(session: requests.Session, from_date_ms: int, start: int) -> dict
         "cnsCategory": CNS_CATEGORY,
         "market": "",
         "fromDate": from_date_ms,
-        "toDate": "",
+        "toDate": to_date_ms,
     }
     resp = session.get(QUERY_URL, params=params, timeout=20)
     resp.raise_for_status()
     return strip_jsonp(resp.text)
 
 
-def fetch_all_items(session: requests.Session, from_date: date) -> list[dict]:
+def fetch_all_items(session: requests.Session, from_date: date, to_date: date | None = None) -> list[dict]:
     """Hakee KAIKKI Pohjoismaiden johdon liiketoimet -tiedotteet fromDate:sta
-    alkaen. Helsinki-suodatus tehdään erikseen (ks. is_helsinki_listing)."""
+    (valinnaisesti toDate:en asti) alkaen. Helsinki-suodatus tehdään erikseen
+    (ks. is_helsinki_listing)."""
     from_ms = to_epoch_millis(from_date)
+    # toDate on päivän LOPPU (seuraavan päivän alku miinus 1 ms), jotta
+    # valittu päivä sisältyy kokonaan hakuun.
+    to_ms = to_epoch_millis(to_date + timedelta(days=1)) if to_date else ""
     items: list[dict] = []
     start = 0
     while True:
-        payload = fetch_page(session, from_ms, start)
+        payload = fetch_page(session, from_ms, start, to_ms)
         results = payload.get("results", {})
         page_items = results.get("item", []) if isinstance(results, dict) else []
         if isinstance(page_items, dict):  # yhden tuloksen vastaus ei aina ole listassa
@@ -198,11 +202,11 @@ def fetch_and_parse_one(session: requests.Session, item: dict) -> dict:
     }
 
 
-def collect(from_date: date) -> list[dict]:
+def collect(from_date: date, to_date: date | None = None) -> list[dict]:
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (compatible; sisapiiriseula-collector/0.2)"
 
-    all_items = fetch_all_items(session, from_date)
+    all_items = fetch_all_items(session, from_date, to_date)
     helsinki_items = [i for i in all_items if is_helsinki_listing(i)]
     print(
         f"{len(helsinki_items)}/{len(all_items)} tiedotetta oli Helsingin markkinalla "
@@ -242,10 +246,11 @@ def save_to_postgres(dsn: str, collected: list[dict]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--from-date", type=date.fromisoformat, required=True)
+    ap.add_argument("--to-date", type=date.fromisoformat, help="Jätä pois hakeaksesi tähän päivään asti.")
     ap.add_argument("--dsn", help="Postgres-yhteysmerkkijono. Jätä pois jos haluat vain tulosteen.")
     args = ap.parse_args()
 
-    collected = collect(args.from_date)
+    collected = collect(args.from_date, args.to_date)
     print(f"\nJäsennetty {len(collected)} tiedotetta.")
 
     if args.dsn:

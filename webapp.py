@@ -46,6 +46,7 @@ PAGE = """
   <p class="muted">Nasdaq Helsinki + First North — johdon liiketoimet -tiedotteet (MAR 19)</p>
   <form method="get" id="hakulomake">
     <label>Alkaen: <input type="date" name="from_date" value="{{ from_date }}"></label>
+    <label>Loppuen: <input type="date" name="to_date" value="{{ to_date }}"></label>
     <button type="submit">Hae tiedotteet</button>
     <p class="muted">Isommalla aikavälillä (esim. useita kuukausia) haku voi kestää
     useita minuutteja, koska jokainen tiedote haetaan erikseen. Sivu ei ole jumissa,
@@ -93,27 +94,27 @@ PAGE = """
 
 @app.route("/")
 def index():
-    from_date_str = request.args.get("from_date")
-    searched = from_date_str is not None
-    if not from_date_str:
-        from_date_str = (date.today() - timedelta(days=14)).isoformat()
+    from_date_str = request.args.get("from_date") or (date.today() - timedelta(days=14)).isoformat()
+    to_date_str = request.args.get("to_date") or date.today().isoformat()
 
     rows = []
     error = None
     release_count = 0
-    if searched:
-        try:
-            from_date = date.fromisoformat(from_date_str)
-            collected = collect(from_date)
-            release_count = len(collected)
-            for entry in collected:
-                rows.extend(entry["transactions"])
-        except Exception as exc:  # näytetään virhe sivulla terminaalin sijaan
-            error = str(exc)
+    searched = True
+    try:
+        from_date = date.fromisoformat(from_date_str)
+        to_date = date.fromisoformat(to_date_str)
+        collected = collect(from_date, to_date)
+        release_count = len(collected)
+        for entry in collected:
+            rows.extend(entry["transactions"])
+    except Exception as exc:  # näytetään virhe sivulla terminaalin sijaan
+        error = str(exc)
 
     return render_template_string(
         PAGE,
         from_date=from_date_str,
+        to_date=to_date_str,
         rows=rows,
         error=error,
         searched=searched,
